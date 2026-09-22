@@ -1,0 +1,16 @@
+{
+  "name": "com.vastlab.vast-volumetricvideo-renderer",
+  "version": "1.0.1",
+  "displayName": "VAST Lab Volumetric Video Renderer",
+  "description": "A unity package for VAST Lab Gaussian Splatting and Volumetric Video projects.",
+  "unity": "6000.6",
+  "author": {
+    "name": "Brandon Coffey",
+    "email": "brandon.coffey@utdallas.edu"
+  },
+  "dependencies": {
+    "com.unity.burst": "1.8.8",
+    "com.unity.collections": "2.1.4",
+    "com.unity.mathematics": "1.2.6"
+  }
+}
