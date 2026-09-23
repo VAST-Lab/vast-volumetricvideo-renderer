@@ -14,8 +14,7 @@
 #define MAX_SORT_JOBS 256
 #define MAX_WORKERS 16
 
-#define true 1
-#define false 0
+#include <stdbool.h>
 
 // Sort job structure
 typedef struct {
@@ -40,14 +39,14 @@ typedef struct {
 // Global state
 static sort_job_t g_sort_jobs[MAX_SORT_JOBS];
 static worker_thread_t g_workers[MAX_WORKERS];
-static atomic_int g_next_job_id = ATOMIC_VAR_INIT(0);
-static atomic_int g_worker_count = ATOMIC_VAR_INIT(4);
-static atomic_bool g_is_initialized = ATOMIC_VAR_INIT(false);
+static atomic_int g_next_job_id = 0;
+static atomic_int g_worker_count = 4;
+static atomic_bool g_is_initialized = false;
 
 // Thread synchronization
 static pthread_mutex_t g_job_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_job_available_cond = PTHREAD_COND_INITIALIZER;
-static atomic_bool g_shutdown_requested = ATOMIC_VAR_INIT(false);
+static atomic_bool g_shutdown_requested = false;
 
 // Calculate squared distance from camera to splat position
 static inline float calc_distance_sq(const float* pos, float cam_x, float cam_y, float cam_z) {
@@ -127,7 +126,7 @@ static sort_job_t* find_available_job() {
             !atomic_load(&g_sort_jobs[i].is_assigned) && 
             !atomic_load(&g_sort_jobs[i].is_completed)) {
             // Try to assign this job to current worker
-            atomic_bool expected = false;
+            bool expected = false;
             if (atomic_compare_exchange_strong(&g_sort_jobs[i].is_assigned, &expected, true)) {
                 return &g_sort_jobs[i];
             }
