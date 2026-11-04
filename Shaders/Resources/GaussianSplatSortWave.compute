@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: MIT
+// Desktop SM 6.0 Wave-Intrinsic DeviceRadixSort compute shader.
+// Automatically used on DX12/Vulkan/Metal when supported; WebGPU uses GaussianSplatUtilities.compute.
+
+#pragma multi_compile __ KEY_UINT KEY_INT KEY_FLOAT
+#pragma multi_compile __ PAYLOAD_UINT PAYLOAD_INT PAYLOAD_FLOAT
+#pragma multi_compile __ SHOULD_ASCEND
+#pragma multi_compile __ SORT_PAIRS
+#pragma multi_compile __ VULKAN
+#pragma kernel InitDeviceRadixSort
+#pragma kernel Upsweep
+#pragma kernel Scan
+#pragma kernel Downsweep
+
+// GPU wave sorting needs wave ops
+#pragma require wavebasic
+#pragma require waveballot
+#pragma use_dxc
+
+#include "DeviceRadixSort.hlsl"

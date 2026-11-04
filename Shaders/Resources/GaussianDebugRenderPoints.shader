@@ -13,11 +13,8 @@ Shader "Gaussian Splatting/Debug/Render Points"
 CGPROGRAM
 #pragma vertex vert
 #pragma fragment frag
-#pragma require compute
-#pragma use_dxc
 
 #include "GaussianSplatting.hlsl"
-#include "UnityCG.cginc"
 
 struct v2f
 {
@@ -26,49 +23,33 @@ struct v2f
 };
 
 float _SplatSize;
-bool _DisplayIndex;
-int _SplatCount;
-
-StructuredBuffer<uint> _SplatIndexMap; // optional mapping
-uint _UseIndexMapping; // 1 when using octree culling, 0 otherwise
+float4x4 _SplatMatrixVP;
+float2 _SplatScreenSize;
 
 v2f vert (uint vtxID : SV_VertexID, uint instID : SV_InstanceID)
 {
     v2f o;
-
     uint splatIndex = instID;
-    if (_UseIndexMapping)
-    {
-        splatIndex = _SplatIndexMap[instID];
-    } 
 
     SplatData splat = LoadSplatData(splatIndex);
 
     float3 centerWorldPos = splat.pos;
     centerWorldPos = mul(unity_ObjectToWorld, float4(centerWorldPos,1)).xyz;
 
-    float4 centerClipPos = mul(UNITY_MATRIX_VP, float4(centerWorldPos, 1));
+    float4 centerClipPos = mul(_SplatMatrixVP, float4(centerWorldPos, 1));
 
     o.vertex = centerClipPos;
-	uint idx = vtxID;
+    uint idx = vtxID;
     float2 quadPos = float2(idx&1, (idx>>1)&1) * 2.0 - 1.0;
-    o.vertex.xy += (quadPos * _SplatSize / _ScreenParams.xy) * o.vertex.w;
+    o.vertex.xy += (quadPos * _SplatSize / _SplatScreenSize) * o.vertex.w;
 
     o.color.rgb = saturate(splat.sh.col);
-    if (_DisplayIndex)
-    {
-        o.color.r = frac((float)splatIndex / (float)_SplatCount * 100);
-        o.color.g = frac((float)splatIndex / (float)_SplatCount * 10);
-        o.color.b = (float)splatIndex / (float)_SplatCount;
-    }
-
     FlipProjectionIfBackbuffer(o.vertex);
     return o;
 }
 
 half4 frag (v2f i) : SV_Target
 {
-    i.color.rgb = GammaToLinearSpace(i.color.rgb);
     return half4(i.color.rgb, 1);
 }
 ENDCG
