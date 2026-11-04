@@ -64,7 +64,7 @@ namespace GaussianSplatting.Editor
                 {
                     EditorGUILayout.Space();
                     EditorGUILayout.LabelField("Octree Culling Statistics", EditorStyles.boldLabel);
-                    var renderers = Object.FindObjectsByType<GaussianSplatRenderer>(FindObjectsSortMode.None);
+                    var renderers = FindObjectsByType<GaussianSplatRenderer>();
                     foreach (var renderer in renderers)
                     {
                         if (renderer.isActiveAndEnabled && renderer.octreeBuilt && renderer.octree != null)
@@ -81,7 +81,7 @@ namespace GaussianSplatting.Editor
             }
 
             EditorGUILayout.PropertyField(m_PropRenderMode);
-            if (!m_PropRenderMode.hasMultipleDifferentValues && m_PropRenderMode.intValue == (int)RenderMode.DebugPoints)
+            if (!m_PropRenderMode.hasMultipleDifferentValues && m_PropRenderMode.intValue == (int)Runtime.RenderMode.DebugPoints)
                 EditorGUILayout.PropertyField(m_PropPointSize);
             EditorGUILayout.PropertyField(m_PropSHOnly);
             serializedObject.ApplyModifiedProperties();
