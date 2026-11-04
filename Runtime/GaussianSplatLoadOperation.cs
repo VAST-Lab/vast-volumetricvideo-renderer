@@ -17,7 +17,7 @@ namespace GaussianSplatting.Runtime
     // buffers for data upload.
     //
     // Advance the loading on the main thread.
-    sealed class GaussianSplatLoadOperation : IDisposable
+    public sealed class GaussianSplatLoadOperation : IDisposable
     {
         enum State { Downloading, Decompressing, DecompressingZstd, Converting, Cameras, Complete }
         State m_State;
