@@ -99,7 +99,33 @@ namespace GaussianSplatting.Editor
                 }
                 case GaussianSplatSourceType.ExternalStreamOr4D:
                 {
-                    EditorGUILayout.HelpBox("Buffers are controlled dynamically by GaussianSplat4DPlayer, GaussianSplatVideoPlayer, or GaussianSplatStreamReceiver.", MessageType.Info);
+                    var p4d = gs.GetComponent<GaussianSplat4DPlayer>();
+                    var pvid = gs.GetComponent<GaussianSplatVideoPlayer>();
+                    var precv = gs.GetComponent<GaussianSplatStreamReceiver>();
+
+                    if (p4d == null && pvid == null && precv == null)
+                    {
+                        EditorGUILayout.HelpBox("No 4D player or stream receiver attached to this GameObject. Add one below to feed dynamic splats:", MessageType.Warning);
+                        EditorGUILayout.BeginHorizontal();
+                        if (GUILayout.Button("Add 4D Player"))
+                        {
+                            Undo.AddComponent<GaussianSplat4DPlayer>(gs.gameObject);
+                        }
+                        if (GUILayout.Button("Add Video Player"))
+                        {
+                            Undo.AddComponent<GaussianSplatVideoPlayer>(gs.gameObject);
+                        }
+                        if (GUILayout.Button("Add Stream Receiver"))
+                        {
+                            Undo.AddComponent<GaussianSplatStreamReceiver>(gs.gameObject);
+                        }
+                        EditorGUILayout.EndHorizontal();
+                    }
+                    else
+                    {
+                        string activeComp = p4d != null ? "GaussianSplat4DPlayer" : (pvid != null ? "GaussianSplatVideoPlayer" : "GaussianSplatStreamReceiver");
+                        EditorGUILayout.HelpBox($"Dynamic splat buffers are controlled by {activeComp}.", MessageType.Info);
+                    }
                     break;
                 }
             }
@@ -157,6 +183,7 @@ namespace GaussianSplatting.Editor
                     int coefficients = (gs.sourceSHDegree + 1) * (gs.sourceSHDegree + 1) - 1;
                     int stride = 28 + GaussianUtils.GetSHDataSize(coefficients);
                     EditorGUILayout.LabelField("Splat Data", $"{stride} bytes/splat ({(long)stride * gs.splatCount / (1024.0 * 1024):N1} MiB)");
+                    EditorGUILayout.LabelField("Bounds", $"{gs.localBounds.size.x:F2} x {gs.localBounds.size.y:F2} x {gs.localBounds.size.z:F2}");
                     if (gs.octreeBuilt && gs.octree != null)
                     {
                         gs.octree.GetDebugInfo(out int leafNodes, out int maxDepth, out int maxSplatsInLeaf);

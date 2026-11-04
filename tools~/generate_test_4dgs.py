@@ -286,7 +286,7 @@ def generate_4dgs_file(output_path, num_frames=60, gop_size=30, splat_count=300,
     return output_path
 
 def main():
-    out_file = "test_data/animated_sphere.4dgs"
+    out_file = "test_data~/animated_sphere.4dgs"
     if len(sys.argv) > 1:
         out_file = sys.argv[1]
 

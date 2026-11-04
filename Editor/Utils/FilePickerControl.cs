@@ -59,29 +59,58 @@ namespace GaussianSplatting.Editor.Utils
             UpdateLabels();
         }
 
+        public static string MakeRelativePath(string full)
+        {
+            if (string.IsNullOrWhiteSpace(full)) return "";
+            full = Path.GetFullPath(full);
+            string relStreaming = GaussianSplatPaths.ToForwardSlashes(Path.GetRelativePath(Application.streamingAssetsPath, full));
+            if (!relStreaming.StartsWith("../", StringComparison.Ordinal) && relStreaming != ".." && !Path.IsPathRooted(relStreaming))
+                return relStreaming;
+
+            string relCurrent = GaussianSplatPaths.ToForwardSlashes(Path.GetRelativePath(Directory.GetCurrentDirectory(), full));
+            if (!relCurrent.StartsWith("../", StringComparison.Ordinal) && relCurrent != ".." && !Path.IsPathRooted(relCurrent))
+                return relCurrent;
+
+            return GaussianSplatPaths.ToForwardSlashes(full);
+        }
+
         static bool TrySourcePath(string file, out string source)
+        {
+            return TrySourcePath(file, new[] { "ply", "spz" }, out source);
+        }
+
+        static bool TrySourcePath(string file, string[] allowedExtensions, out string source)
         {
             source = null;
             if (string.IsNullOrWhiteSpace(file) || !File.Exists(file))
                 return false;
             string extension = Path.GetExtension(file).ToLowerInvariant();
-            if (extension != ".ply" && extension != ".spz")
-                return false;
-            string full = Path.GetFullPath(file);
-            source = GaussianSplatPaths.ToForwardSlashes(Path.GetRelativePath(Application.streamingAssetsPath, full));
-            if (source == ".." || source.StartsWith("../", StringComparison.Ordinal) || Path.IsPathRooted(source))
+            bool matched = false;
+            if (allowedExtensions != null && allowedExtensions.Length > 0)
             {
-                source = GaussianSplatPaths.ToForwardSlashes(Path.GetRelativePath(Directory.GetCurrentDirectory(), full));
-                // a relative name might resolve to a different file in StreamingAssets
-                string resolved = GaussianSplatReader.ResolvePath(Application.streamingAssetsPath, source);
-                var comparison = Application.platform == RuntimePlatform.WindowsEditor ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-                if (!string.Equals(Path.GetFullPath(resolved), full, comparison))
-                    source = GaussianSplatPaths.ToForwardSlashes(full);
+                for (int i = 0; i < allowedExtensions.Length; i++)
+                {
+                    string ext = allowedExtensions[i];
+                    if (!ext.StartsWith('.')) ext = "." + ext;
+                    if (string.Equals(extension, ext, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matched = true;
+                        break;
+                    }
+                }
             }
+            else
+            {
+                matched = extension == ".ply" || extension == ".spz";
+            }
+            if (!matched)
+                return false;
+
+            source = MakeRelativePath(file);
             return true;
         }
 
-        string Browse(string value)
+        string Browse(string value, string[] allowedExtensions = null, string filterTitle = "Gaussian splats")
         {
             LoadHistory();
             string current = string.IsNullOrEmpty(value) && s_RecentPaths.Count > 0 ? s_RecentPaths[0] : value;
@@ -90,25 +119,33 @@ namespace GaussianSplatting.Editor.Utils
             {
                 try
                 {
-                    string candidate = Path.GetDirectoryName(GaussianSplatReader.ResolvePath(directory, current));
+                    string candidate = Path.GetDirectoryName(GaussianSplatReader.Resolve4DPath(directory, current));
                     if (Directory.Exists(candidate))
                         directory = candidate;
                 }
                 catch (ArgumentException) { } // browse from StreamingAssets if the current text is invalid
             }
-            string file = EditorUtility.OpenFilePanelWithFilters("Select splat file", directory, new[] { "Gaussian splats", "ply,spz" });
+
+            var exts = allowedExtensions ?? new[] { "ply", "spz" };
+            string extList = string.Join(",", exts).Replace(".", "");
+            string file = EditorUtility.OpenFilePanelWithFilters("Select splat file", directory, new[] { filterTitle, extList });
             if (string.IsNullOrEmpty(file))
                 return null;
-            if (TrySourcePath(file, out string relative))
+            if (TrySourcePath(file, exts, out string relative))
             {
                 RememberPath(relative);
                 return relative;
             }
-            EditorUtility.DisplayDialog("Choose a splat file", "Choose a PLY/SPZ file", "OK");
+            EditorUtility.DisplayDialog($"Choose a {filterTitle} file", $"Choose a valid file ({extList})", "OK");
             return null;
         }
 
         public string PathFieldGUI(Rect position, GUIContent label, string value)
+        {
+            return PathFieldGUI(position, label, value, new[] { "ply", "spz" }, "Gaussian splats");
+        }
+
+        public string PathFieldGUI(Rect position, GUIContent label, string value, string[] allowedExtensions, string filterTitle = "Gaussian splats")
         {
             LoadHistory();
             Rect field = EditorGUI.PrefixLabel(position, label);
@@ -123,15 +160,15 @@ namespace GaussianSplatting.Editor.Utils
                 value = GaussianSplatPaths.IsUrl(typed) ? typed : GaussianSplatPaths.ToForwardSlashes(typed);
                 try
                 {
-                    string full = GaussianSplatReader.ResolvePath(Application.streamingAssetsPath, value);
+                    string full = GaussianSplatReader.ResolveFileWithExtensions(Application.streamingAssetsPath, value, allowedExtensions, "");
                     if (GaussianSplatPaths.IsUrl(full) || File.Exists(full))
                         RememberPath(value);
                 }
                 catch (ArgumentException) { } // inspector displays invalid/missing path messages
             }
-            if (GUI.Button(browse, EditorGUIUtility.IconContent("Folder Icon", "|Choose a PLY/SPZ file"), EditorStyles.miniButton))
+            if (GUI.Button(browse, EditorGUIUtility.IconContent("Folder Icon", "|Choose a file"), EditorStyles.miniButton))
             {
-                string selected = Browse(value);
+                string selected = Browse(value, allowedExtensions, filterTitle);
                 if (selected != null)
                 {
                     value = selected;
@@ -153,13 +190,53 @@ namespace GaussianSplatting.Editor.Utils
             if (field.Contains(evt.mousePosition) && GUI.enabled && evt.type is EventType.DragUpdated or EventType.DragPerform)
             {
                 string relative = null;
-                bool valid = DragAndDrop.paths.Length == 1 && TrySourcePath(DragAndDrop.paths[0], out relative);
+                bool valid = DragAndDrop.paths.Length == 1 && TrySourcePath(DragAndDrop.paths[0], allowedExtensions, out relative);
                 DragAndDrop.visualMode = valid ? DragAndDropVisualMode.Link : DragAndDropVisualMode.Rejected;
                 if (valid && evt.type == EventType.DragPerform)
                 {
                     DragAndDrop.AcceptDrag();
                     value = relative;
                     RememberPath(value);
+                    GUI.changed = true;
+                }
+                evt.Use();
+            }
+            return value;
+        }
+
+        public string FolderFieldGUI(Rect position, GUIContent label, string value)
+        {
+            Rect field = EditorGUI.PrefixLabel(position, label);
+            var browse = new Rect(field.xMax - 22, field.y, 22, field.height);
+            var text = new Rect(field.x, field.y, browse.x - field.x - 2, field.height);
+
+            EditorGUI.BeginChangeCheck();
+            string typed = EditorGUI.DelayedTextField(text, value ?? "");
+            if (EditorGUI.EndChangeCheck())
+            {
+                value = GaussianSplatPaths.ToForwardSlashes(typed);
+                GUI.changed = true;
+            }
+
+            if (GUI.Button(browse, EditorGUIUtility.IconContent("Folder Icon", "|Choose a Sequence Folder"), EditorStyles.miniButton))
+            {
+                string selected = EditorUtility.OpenFolderPanel("Select Sequence Folder (.spz / .ply)", Application.streamingAssetsPath, "");
+                if (!string.IsNullOrEmpty(selected))
+                {
+                    value = MakeRelativePath(selected);
+                    GUI.changed = true;
+                }
+            }
+
+            Event evt = Event.current;
+            if (field.Contains(evt.mousePosition) && GUI.enabled && evt.type is EventType.DragUpdated or EventType.DragPerform)
+            {
+                bool valid = DragAndDrop.paths.Length == 1 && Directory.Exists(DragAndDrop.paths[0]);
+                DragAndDrop.visualMode = valid ? DragAndDropVisualMode.Link : DragAndDropVisualMode.Rejected;
+                if (valid && evt.type == EventType.DragPerform)
+                {
+                    DragAndDrop.AcceptDrag();
+                    value = MakeRelativePath(DragAndDrop.paths[0]);
                     GUI.changed = true;
                 }
                 evt.Use();

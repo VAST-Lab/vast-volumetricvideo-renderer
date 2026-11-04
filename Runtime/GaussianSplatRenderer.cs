@@ -813,8 +813,20 @@ namespace GaussianSplatting.Runtime
             Reload();
         }
 
+        public void SetExternalOr4DMode()
+        {
+            FinishLoading();
+            m_SourceType = GaussianSplatSourceType.ExternalStreamOr4D;
+            m_PrevSourceType = GaussianSplatSourceType.ExternalStreamOr4D;
+            loadError = null;
+            EnsureRegistered();
+        }
+
         public void AllocateDynamicBuffers(int maxSplatCount, int maxSHDegree)
         {
+            if (maxSplatCount <= 0)
+                return;
+            SetExternalOr4DMode();
             DisposeResources();
             m_SplatCount = maxSplatCount;
             sourceSHDegree = maxSHDegree;
@@ -866,6 +878,13 @@ namespace GaussianSplatting.Runtime
             }
 
             GaussianSplatRenderSystem.instance.InvalidateTemporalHistory();
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+                UnityEditor.SceneView.RepaintAll();
+            }
+#endif
         }
 
         public void Reload()
@@ -875,10 +894,34 @@ namespace GaussianSplatting.Runtime
             m_PrevSourceType = m_SourceType;
             m_PrevSplatAsset = m_SplatAsset;
             m_PrevTextAsset = m_TextAsset;
-            DisposeResources();
             loadError = null;
             cameras = Array.Empty<GaussianSplatCameras.CameraInfo>();
-            if (!isActiveAndEnabled) return;
+
+            if (!isActiveAndEnabled)
+            {
+                DisposeResources();
+                return;
+            }
+
+            if (m_SourceType == GaussianSplatSourceType.ExternalStreamOr4D)
+            {
+                EnsureRegistered();
+                var player4D = GetComponent<GaussianSplat4DPlayer>();
+                if (player4D != null && player4D.enabled)
+                {
+                    player4D.Initialize();
+                    return;
+                }
+                var videoPlayer = GetComponent<GaussianSplatVideoPlayer>();
+                if (videoPlayer != null && videoPlayer.enabled)
+                {
+                    videoPlayer.Initialize();
+                    return;
+                }
+                return;
+            }
+
+            DisposeResources();
             try
             {
                 if (!resourcesAreSetUp) throw new InvalidOperationException("Shader resources are missing");
@@ -898,8 +941,6 @@ namespace GaussianSplatting.Runtime
                         if (m_TextAsset == null || m_TextAsset.bytes == null || m_TextAsset.bytes.Length == 0) return;
                         m_LoadOperation = new GaussianSplatLoadOperation(m_TextAsset.bytes);
                         break;
-                    case GaussianSplatSourceType.ExternalStreamOr4D:
-                        return;
                 }
 
                 isLoading = true;

@@ -75,7 +75,7 @@ namespace GaussianSplatting.Runtime
 
             ParseSidecarJson();
 
-            m_Renderer.m_SourceType = GaussianSplatSourceType.ExternalStreamOr4D;
+            m_Renderer.SetExternalOr4DMode();
             m_Renderer.AllocateDynamicBuffers(m_SplatCount, 0);
 
             // Compute texture dimensions (2*W x 2*H quadrant atlas)
@@ -106,7 +106,7 @@ namespace GaussianSplatting.Runtime
             else if (!string.IsNullOrWhiteSpace(m_VideoUrl))
             {
                 m_VideoPlayer.source = VideoSource.Url;
-                m_VideoPlayer.url = GaussianSplatReader.ResolvePath(Application.streamingAssetsPath, m_VideoUrl);
+                m_VideoPlayer.url = GaussianSplatReader.ResolveVideoPath(Application.streamingAssetsPath, m_VideoUrl);
             }
 
             m_VideoPlayer.frameReady += OnFrameReady;
