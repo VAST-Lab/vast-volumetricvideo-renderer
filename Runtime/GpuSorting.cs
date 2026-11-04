@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 using UnityEngine;
 using UnityEngine.Assertions;
 using UnityEngine.Rendering;
@@ -5,12 +7,12 @@ using UnityEngine.Rendering;
 namespace GaussianSplatting.Runtime
 {
     // GPU (uint key, uint payload) 8 bit-LSD radix sort, using reduce-then-scan
-    // Copyright Thomas Smith 2024, MIT license
-    // https://github.com/b0nes164/GPUSorting
+    // Supports both Desktop SM 6.0 wave-intrinsic DeviceRadixSort (Thomas Smith 2024, MIT license)
+    // and Subgroup-Free WebGPU Radix Sort (WebGpuRadixSort.hlsl).
 
     public class GpuSorting
     {
-        //The size of a threadblock partition in the sort
+        //The size of a threadblock partition in the sort (both Wave and WebGPU sort use 3840)
         const uint DEVICE_RADIX_SORT_PARTITION_SIZE = 3840;
 
         //The size of our radix in bits
@@ -21,13 +23,6 @@ namespace GaussianSplatting.Runtime
 
         //Number of sorting passes required to sort a 32bit key, KEY_BITS / DEVICE_RADIX_SORT_BITS
         const uint DEVICE_RADIX_SORT_PASSES = 4;
-
-        //Keywords to enable for the shader
-        private LocalKeyword m_keyUintKeyword;
-        private LocalKeyword m_payloadUintKeyword;
-        private LocalKeyword m_ascendKeyword;
-        private LocalKeyword m_sortPairKeyword;
-        private LocalKeyword m_vulkanKeyword;
 
         public struct Args
         {
@@ -52,14 +47,20 @@ namespace GaussianSplatting.Runtime
                 uint reducedScratchBufferSize = DEVICE_RADIX_SORT_RADIX * DEVICE_RADIX_SORT_PASSES;
 
                 var target = GraphicsBuffer.Target.Structured;
-                var resources = new SupportResources
+                var resources = new SupportResources();
+                try
                 {
-                    altBuffer = new GraphicsBuffer(target, (int)count, 4) { name = "DeviceRadixAlt" },
-                    altPayloadBuffer = new GraphicsBuffer(target, (int)count, 4) { name = "DeviceRadixAltPayload" },
-                    passHistBuffer = new GraphicsBuffer(target, (int)scratchBufferSize, 4) { name = "DeviceRadixPassHistogram" },
-                    globalHistBuffer = new GraphicsBuffer(target, (int)reducedScratchBufferSize, 4) { name = "DeviceRadixGlobalHistogram" },
-                };
-                return resources;
+                    resources.altBuffer = new GraphicsBuffer(target, (int)count, 4) { name = "DeviceRadixAlt" };
+                    resources.altPayloadBuffer = new GraphicsBuffer(target, (int)count, 4) { name = "DeviceRadixAltPayload" };
+                    resources.passHistBuffer = new GraphicsBuffer(target, (int)scratchBufferSize, 4) { name = "DeviceRadixPassHistogram" };
+                    resources.globalHistBuffer = new GraphicsBuffer(target, (int)reducedScratchBufferSize, 4) { name = "DeviceRadixGlobalHistogram" };
+                    return resources;
+                }
+                catch
+                {
+                    resources.Dispose();
+                    throw;
+                }
             }
 
             public void Dispose()
@@ -81,56 +82,69 @@ namespace GaussianSplatting.Runtime
         readonly int m_kernelUpsweep = -1;
         readonly int m_kernelScan = -1;
         readonly int m_kernelDownsweep = -1;
-
+        readonly bool m_UsingWebGpuSort;
         readonly bool m_Valid;
 
         public bool Valid => m_Valid;
+        public bool UsingWebGpuSort => m_UsingWebGpuSort;
 
-        public GpuSorting(ComputeShader cs)
+        public GpuSorting(ComputeShader csFallback, ComputeShader csWave = null)
         {
-            m_CS = cs;
-            if (cs)
+            bool useWave = false;
+            if (csWave != null && SystemInfo.graphicsDeviceType != GraphicsDeviceType.WebGPU)
             {
-                m_kernelInitDeviceRadixSort = cs.FindKernel("InitDeviceRadixSort");
-                m_kernelUpsweep = cs.FindKernel("Upsweep");
-                m_kernelScan = cs.FindKernel("Scan");
-                m_kernelDownsweep = cs.FindKernel("Downsweep");
-            }
+                int kInit = csWave.HasKernel("InitDeviceRadixSort") ? csWave.FindKernel("InitDeviceRadixSort") : -1;
+                int kUp = csWave.HasKernel("Upsweep") ? csWave.FindKernel("Upsweep") : -1;
+                int kScan = csWave.HasKernel("Scan") ? csWave.FindKernel("Scan") : -1;
+                int kDown = csWave.HasKernel("Downsweep") ? csWave.FindKernel("Downsweep") : -1;
 
-            m_Valid = m_kernelInitDeviceRadixSort >= 0 &&
-                      m_kernelUpsweep >= 0 &&
-                      m_kernelScan >= 0 &&
-                      m_kernelDownsweep >= 0;
-            if (m_Valid)
-            {
-                if (!cs.IsSupported(m_kernelInitDeviceRadixSort) ||
-                    !cs.IsSupported(m_kernelUpsweep) ||
-                    !cs.IsSupported(m_kernelScan) ||
-                    !cs.IsSupported(m_kernelDownsweep))
+                if (kInit >= 0 && kUp >= 0 && kScan >= 0 && kDown >= 0 &&
+                    csWave.IsSupported(kInit) && csWave.IsSupported(kUp) &&
+                    csWave.IsSupported(kScan) && csWave.IsSupported(kDown))
                 {
-                    m_Valid = false;
+                    m_CS = csWave;
+                    m_kernelInitDeviceRadixSort = kInit;
+                    m_kernelUpsweep = kUp;
+                    m_kernelScan = kScan;
+                    m_kernelDownsweep = kDown;
+                    m_Valid = true;
+                    m_UsingWebGpuSort = false;
+                    useWave = true;
+
+                    csWave.EnableKeyword(new LocalKeyword(csWave, "KEY_UINT"));
+                    csWave.EnableKeyword(new LocalKeyword(csWave, "PAYLOAD_UINT"));
+                    csWave.EnableKeyword(new LocalKeyword(csWave, "SHOULD_ASCEND"));
+                    csWave.EnableKeyword(new LocalKeyword(csWave, "SORT_PAIRS"));
+                    var vulkanKw = new LocalKeyword(csWave, "VULKAN");
+                    if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Vulkan)
+                        csWave.EnableKeyword(vulkanKw);
+                    else
+                        csWave.DisableKeyword(vulkanKw);
                 }
             }
 
-            m_keyUintKeyword = new LocalKeyword(cs, "KEY_UINT");
-            m_payloadUintKeyword = new LocalKeyword(cs, "PAYLOAD_UINT");
-            m_ascendKeyword = new LocalKeyword(cs, "SHOULD_ASCEND");
-            m_sortPairKeyword = new LocalKeyword(cs, "SORT_PAIRS");
-            m_vulkanKeyword = new LocalKeyword(cs, "VULKAN");
+            if (!useWave && csFallback != null)
+            {
+                m_CS = csFallback;
+                m_UsingWebGpuSort = true;
+                m_kernelInitDeviceRadixSort = csFallback.HasKernel("InitWebGpuRadixSort") ? csFallback.FindKernel("InitWebGpuRadixSort") : -1;
+                m_kernelUpsweep = csFallback.HasKernel("UpsweepWebGpu") ? csFallback.FindKernel("UpsweepWebGpu") : -1;
+                m_kernelScan = csFallback.HasKernel("ScanWebGpu") ? csFallback.FindKernel("ScanWebGpu") : -1;
+                m_kernelDownsweep = csFallback.HasKernel("DownsweepWebGpu") ? csFallback.FindKernel("DownsweepWebGpu") : -1;
 
-            cs.EnableKeyword(m_keyUintKeyword);
-            cs.EnableKeyword(m_payloadUintKeyword);
-            cs.EnableKeyword(m_ascendKeyword);
-            cs.EnableKeyword(m_sortPairKeyword);
-            if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Vulkan)
-                cs.EnableKeyword(m_vulkanKeyword);
-            else
-                cs.DisableKeyword(m_vulkanKeyword);
+                m_Valid = m_kernelInitDeviceRadixSort >= 0 &&
+                          m_kernelUpsweep >= 0 &&
+                          m_kernelScan >= 0 &&
+                          m_kernelDownsweep >= 0 &&
+                          csFallback.IsSupported(m_kernelInitDeviceRadixSort) &&
+                          csFallback.IsSupported(m_kernelUpsweep) &&
+                          csFallback.IsSupported(m_kernelScan) &&
+                          csFallback.IsSupported(m_kernelDownsweep);
+            }
         }
 
         static uint DivRoundUp(uint x, uint y) => (x + y - 1) / y;
 
-        //Can we remove the last 4 padding without breaking?
         struct SortConstants
         {
             public uint numKeys;                        // The number of keys to sort

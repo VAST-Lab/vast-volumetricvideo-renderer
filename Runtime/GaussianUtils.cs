@@ -17,91 +17,53 @@ namespace GaussianSplatting.Runtime
             return dc0 * kSH_C0 + 0.5f;
         }
 
-        public static float3 LinearScale(float3 logScale)
+        // RGB10E2 with a 0.3125 bias: decoded range [-0.3125, 3.68359375].
+        // Non-finite colors are rejected before encoding.
+        public static uint PackColorRGB10E2(float3 color)
         {
-            return math.abs(math.exp(logScale));
-        }
-
-        public static float SquareCentered01(float x)
-        {
-            x -= 0.5f;
-            x *= x * math.sign(x);
-            return x * 2.0f + 0.5f;
-        }
-
-        public static float InvSquareCentered01(float x)
-        {
-            x -= 0.5f;
-            x *= 0.5f;
-            x = math.sqrt(math.abs(x)) * math.sign(x);
-            return x + 0.5f;
-        }
-
-        public static float4 NormalizeSwizzleRotation(float4 wxyz)
-        {
-            return math.normalize(wxyz).yzwx;
-        }
-
-        // Returns three smallest quaternion components in xyz (normalized to 0..1 range), and index/3 of the largest one in w
-        public static float4 PackSmallest3Rotation(float4 q)
-        {
-            // find biggest component
-            float4 absQ = math.abs(q);
-            int index = 0;
-            float maxV = absQ.x;
-            if (absQ.y > maxV)
+            color = math.clamp(color + 0.3125f, 0, 3.99609375f);
+            float maxColor = math.cmax(color);
+            int exponent = math.max(0, (int)(math.asuint(maxColor) >> 23) - 125);
+            float scale = math.asfloat((uint)(exponent + 116) << 23); // 2^(exponent - 11)
+            // rounding the largest mantissa can carry into the shared exponent.
+            if (math.floor(maxColor / scale + 0.5f) >= 1024)
             {
-                index = 1;
-                maxV = absQ.y;
+                ++exponent;
+                scale *= 2;
             }
-            if (absQ.z > maxV)
+            uint3 mantissa = (uint3)math.floor(color / scale + 0.5f);
+            return mantissa.x | (mantissa.y << 10) | (mantissa.z << 20) | ((uint)exponent << 30);
+        }
+
+        // Encode a normalized XYZW quaternion using SPZ v3's smallest-three format.
+        public static uint EncodeSpzSmallest3Rotation(float4 rotation)
+        {
+            float4 absRotation = math.abs(rotation);
+            int largest = 0;
+            for (int c = 1; c < 4; ++c)
+                if (absRotation[c] > absRotation[largest]) largest = c;
+            if (rotation[largest] < 0) rotation = -rotation;
+            uint packed = (uint)largest;
+            for (int c = 0; c < 4; ++c)
             {
-                index = 2;
-                maxV = absQ.z;
+                if (c == largest) continue;
+                uint magnitude = (uint)(511f * (math.abs(rotation[c]) / 0.7071067811865475f) + 0.5f);
+                uint sign = rotation[c] < 0 ? 512u : 0u;
+                packed = (packed << 10) | sign | magnitude;
             }
-            if (absQ.w > maxV)
-            {
-                index = 3;
-                maxV = absQ.w;
-            }
-
-            if (index == 0) q = q.yzwx;
-            if (index == 1) q = q.xzwy;
-            if (index == 2) q = q.xywz;
-
-            float3 three = q.xyz * (q.w >= 0 ? 1 : -1); // -1/sqrt2..+1/sqrt2 range
-            three = (three * math.SQRT2) * 0.5f + 0.5f; // 0..1 range
-
-            return new float4(three, index / 3.0f);
+            return packed;
         }
 
+        // FP16 range followed by RGB565 coefficients, padded to a whole uint
+        public static int GetSHDataSize(int coefficients) => coefficients == 0 ? 0 : ((2 + coefficients * 2 + 3) / 4) * 4;
 
-        // Based on https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
-        // Insert two 0 bits after each of the 21 low bits of x
-        static ulong MortonPart1By2(ulong x)
+        // Pack one RGB SH coefficient into signed 5.6.5 bits, using per-splat range.
+        // Symmetric signed quantization preserves zero exactly.
+        public static uint PackSHCoefficient(float3 sh, float range)
         {
-            x &= 0x1fffff;
-            x = (x ^ (x << 32)) & 0x1f00000000ffffUL;
-            x = (x ^ (x << 16)) & 0x1f0000ff0000ffUL;
-            x = (x ^ (x << 8)) & 0x100f00f00f00f00fUL;
-            x = (x ^ (x << 4)) & 0x10c30c30c30c30c3UL;
-            x = (x ^ (x << 2)) & 0x1249249249249249UL;
-            return x;
-        }
-        // Encode three 21-bit integers into 3D Morton order
-        public static ulong MortonEncode3(uint3 v)
-        {
-            return (MortonPart1By2(v.z) << 2) | (MortonPart1By2(v.y) << 1) | MortonPart1By2(v.x);
-        }
-
-        // See GaussianSplatting.hlsl
-        public static uint2 DecodeMorton2D_16x16(uint t)
-        {
-            t = (t & 0xFF) | ((t & 0xFE) << 7); // -EAFBGCHEAFBGCHD
-            t &= 0x5555;                        // -E-F-G-H-A-B-C-D
-            t = (t ^ (t >> 1)) & 0x3333;        // --EF--GH--AB--CD
-            t = (t ^ (t >> 2)) & 0x0f0f;        // ----EFGH----ABCD
-            return new uint2(t & 0xF, t >> 8);  // --------EFGHABCD
+            float3 normalized = math.clamp(range > 0 ? sh / range : 0, -1, 1);
+            int3 v = (int3)math.round(normalized * new float3(15, 31, 15));
+            return ((uint)v.x & 31) | (((uint)v.y & 63) << 5) | (((uint)v.z & 31) << 11);
         }
     }
 }

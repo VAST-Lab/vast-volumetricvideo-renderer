@@ -31,7 +31,7 @@ using System.Reflection;
 using System.Runtime.Serialization;
 using System.Text;
 
-namespace GaussianSplatting.Editor.Utils
+namespace GaussianSplatting.Runtime
 {
     // Really simple JSON parser in ~300 lines
     // - Attempts to parse JSON files with minimal GC allocation
@@ -50,6 +50,9 @@ namespace GaussianSplatting.Editor.Utils
     // - No JIT Emit support to parse structures quickly
     // - Limited to parsing <2GB JSON files (due to int.MaxValue)
     // - Parsing of abstract classes or interfaces is NOT supported and will throw an exception.
+#if UNITY_6000_5_OR_NEWER
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     public static class JSONParser
     {
         [ThreadStatic] static Stack<List<string>> splitArrayPool;

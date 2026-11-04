@@ -271,13 +271,7 @@ namespace GaussianSplatting.Runtime
             try
             {
                 m_AllPositionsNative = new NativeArray<float3>(total, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-                for (int i = 0; i < splatInfos.Count; i++)
-                {
-                    var si = splatInfos[i];
-                    int orig = si.originalIndex;
-                    if ((uint)orig < (uint)total)
-                        m_AllPositionsNative[orig] = si.position;
-                }
+                m_AllPositionsNative.CopyFrom(splatPositions);
                 m_AllPositionsNativeValid = true;
             }
             catch (Exception ex)
@@ -626,13 +620,10 @@ namespace GaussianSplatting.Runtime
         /// Perform frustum culling and update visible splat indices.
         /// Returns number of visible splats.
         /// </summary>
-        public int CullFrustum(Camera camera)
+        public int CullFrustum(Camera camera, Transform splatTransform = null)
         {
             if (!m_Built)
                 return 0;
-
-            // Estimate capacity needed (total splats as upper bound)
-            int estimatedCapacity = m_TotalSplats;
 
             if (!m_VisibleSplatIndicesValid || !m_VisibleSplatIndices.IsCreated)
             {
@@ -640,8 +631,10 @@ namespace GaussianSplatting.Runtime
                 return 0;
             }
 
-            // Extract frustum planes from camera
-            var frustumPlanes = GeometryUtility.CalculateFrustumPlanes(camera);
+            // Extract frustum planes from camera (in object local space if transform provided)
+            var frustumPlanes = splatTransform != null
+                ? GeometryUtility.CalculateFrustumPlanes(camera.cullingMatrix * splatTransform.localToWorldMatrix)
+                : GeometryUtility.CalculateFrustumPlanes(camera);
 
             // Traverse octree and collect visible splats
             int currentIndex = 0;
@@ -818,13 +811,16 @@ namespace GaussianSplatting.Runtime
         /// <summary>
         /// Draw wireframe boxes for each non-empty leaf node. Call this from a MonoBehaviour's OnDrawGizmos or OnDrawGizmosSelected.
         /// </summary>
-        public void DrawLeafBoundsGizmos(Color color)
+        public void DrawLeafBoundsGizmos(Color color, Matrix4x4? localToWorld = null)
         {
             if (!m_Built || m_Nodes.Count == 0)
                 return;
 
-            var prev = Gizmos.color;
+            var prevColor = Gizmos.color;
+            var prevMatrix = Gizmos.matrix;
             Gizmos.color = color;
+            if (localToWorld.HasValue)
+                Gizmos.matrix = localToWorld.Value;
 
             for (int i = 0; i < m_Nodes.Count; i++)
             {
@@ -839,7 +835,8 @@ namespace GaussianSplatting.Runtime
                 Gizmos.DrawWireCube(node.bounds.center, node.bounds.size);
             }
 
-            Gizmos.color = prev;
+            Gizmos.color = prevColor;
+            Gizmos.matrix = prevMatrix;
         }
 
         public void Clear()
@@ -924,11 +921,13 @@ namespace GaussianSplatting.Runtime
         /// Sort visible splat indices by 3D distance from camera (front-to-back for alpha blending).
         /// Hierarchical sorting optimization.
         /// </summary>
-        public void SortVisibleSplatsByDepth(Camera camera)
+        public void SortVisibleSplatsByDepth(Camera camera, Transform splatTransform = null)
         {
             if (!m_Built)
                 return;
-            var camPosition = camera.transform.position;
+            var camPosition = splatTransform != null
+                ? splatTransform.InverseTransformPoint(camera.transform.position)
+                : camera.transform.position;
             
             if (!m_VisibleSplatIndicesValid || !m_VisibleSplatIndices.IsCreated)
             {
@@ -937,7 +936,9 @@ namespace GaussianSplatting.Runtime
             }
             
             m_VisibleNodeRefs.Clear();
-            var frustumPlanes = GeometryUtility.CalculateFrustumPlanes(camera);
+            var frustumPlanes = splatTransform != null
+                ? GeometryUtility.CalculateFrustumPlanes(camera.cullingMatrix * splatTransform.localToWorldMatrix)
+                : GeometryUtility.CalculateFrustumPlanes(camera);
             CollectVisibleNodesWithDistance(0, frustumPlanes, camPosition);
 
             if (enableParallelSorting)

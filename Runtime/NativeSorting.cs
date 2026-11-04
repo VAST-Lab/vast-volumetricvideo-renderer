@@ -13,6 +13,9 @@ namespace GaussianSplatting.Runtime
     /// Native interface for WASM threading support for splat sorting.
     /// Provides background threading for WebGPU platform where Unity's Task system is not supported.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     public static class NativeSorting
     {
         // Job handle for tracking native sort operations
@@ -176,7 +179,7 @@ namespace GaussianSplatting.Runtime
                 string platformName = GetPlatformName();
                 Debug.Log($"NativeSorting: Initialized with {workerThreads} worker threads on {platformName} platform");
             }
-            catch (DllNotFoundException dllEx)
+            catch (DllNotFoundException)
             {
                 string platformName = GetPlatformName();
                 Debug.LogWarning($"NativeSorting: Native library not found on {platformName} platform. " +
