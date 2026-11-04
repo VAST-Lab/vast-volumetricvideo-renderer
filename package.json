@@ -1,6 +1,6 @@
 {
 	"name": "com.vastlab.vast-volumetricvideo-renderer",
-	"version": "3.0.0",
+	"version": "3.0.1",
 	"displayName": "VAST Lab Volumetric Video Renderer",
 	"description": "A Unity 6000.6 package for VAST Lab 3D/4D Gaussian Splatting and Volumetric Video projects with WebGPU support.",
 	"unity": "6000.6",
