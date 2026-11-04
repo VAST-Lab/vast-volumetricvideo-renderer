@@ -66,6 +66,46 @@ namespace GaussianSplatting.Runtime
             catch { Dispose(); throw; }
         }
 
+        public GaussianSplatLoadOperation(byte[] memoryBytes, string optionalCamerasJson = null)
+        {
+            try
+            {
+                if (memoryBytes == null || memoryBytes.Length == 0)
+                    throw new ArgumentException("Memory buffer cannot be empty", nameof(memoryBytes));
+                m_Stream = new MemoryStream(memoryBytes, writable: false);
+                if (!string.IsNullOrEmpty(optionalCamerasJson))
+                    cameras = GaussianSplatCameras.Parse(optionalCamerasJson);
+                ReadHeader();
+            }
+            catch { Dispose(); throw; }
+        }
+
+        public unsafe GaussianSplatLoadOperation(NativeArray<byte> memoryBytes, string optionalCamerasJson = null)
+        {
+            try
+            {
+                if (!memoryBytes.IsCreated || memoryBytes.Length == 0)
+                    throw new ArgumentException("NativeArray cannot be empty", nameof(memoryBytes));
+                m_Stream = new UnmanagedMemoryStream((byte*)memoryBytes.GetUnsafeReadOnlyPtr(), memoryBytes.Length);
+                if (!string.IsNullOrEmpty(optionalCamerasJson))
+                    cameras = GaussianSplatCameras.Parse(optionalCamerasJson);
+                ReadHeader();
+            }
+            catch { Dispose(); throw; }
+        }
+
+        public GaussianSplatLoadOperation(Stream stream, string optionalCamerasJson = null)
+        {
+            try
+            {
+                m_Stream = stream ?? throw new ArgumentNullException(nameof(stream));
+                if (!string.IsNullOrEmpty(optionalCamerasJson))
+                    cameras = GaussianSplatCameras.Parse(optionalCamerasJson);
+                ReadHeader();
+            }
+            catch { Dispose(); throw; }
+        }
+
         void OpenLocalFile(string path)
         {
             m_CameraPath = GaussianSplatPaths.ChangeExtension(path, ".json");
@@ -337,19 +377,25 @@ namespace GaussianSplatting.Runtime
 
         void ReadCameras()
         {
+            if (cameras != null && cameras.Length > 0)
+            {
+                FinishCameras();
+                return;
+            }
+
             if (m_Request != null)
             {
                 if (!m_Request.isDone) return;
                 if (m_Request.result == UnityWebRequest.Result.Success)
                     cameras = GaussianSplatCameras.Parse(m_Request.downloadHandler.text);
             }
-            else if (GaussianSplatPaths.IsUrl(m_CameraPath))
+            else if (!string.IsNullOrEmpty(m_CameraPath) && GaussianSplatPaths.IsUrl(m_CameraPath))
             {
                 m_Request = UnityWebRequest.Get(m_CameraPath);
                 m_Request.SendWebRequest();
                 return;
             }
-            else if (File.Exists(m_CameraPath))
+            else if (!string.IsNullOrEmpty(m_CameraPath) && File.Exists(m_CameraPath))
             {
                 cameras = GaussianSplatCameras.Parse(File.ReadAllText(m_CameraPath));
             }

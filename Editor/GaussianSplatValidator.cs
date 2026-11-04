@@ -44,6 +44,71 @@ namespace GaussianSplatting.Editor
             ValidateImpl("MetalFullPrec");
         }
 
+        [MenuItem("Tools/Gaussian Splats/Debug/Validate 4DGS Decoder Pipeline")]
+        public static void Validate4DGS()
+        {
+            string testFile = Path.Combine(Directory.GetCurrentDirectory(), "test_data/animated_sphere.4dgs");
+            if (!File.Exists(testFile))
+            {
+                testFile = Path.Combine(Application.streamingAssetsPath, "animated_sphere.4dgs");
+            }
+
+            if (!File.Exists(testFile))
+            {
+                Debug.LogError($"[4DGS Validator] Test file not found at {testFile}. Run tools/generate_test_4dgs.py first.");
+                return;
+            }
+
+            try
+            {
+                Debug.Log($"[4DGS Validator] Loading container: {testFile}");
+                using var fs = new FileStream(testFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var reader = new FourDGSFileReader(fs, ownsStream: false);
+
+                if (!reader.isLoaded)
+                    throw new System.Exception("Container metadata is invalid.");
+
+                Debug.Log($"[4DGS Validator] Header valid. Splats={reader.splatCount}, Frames={reader.totalFrames}, GOP={reader.header.gopSize}, FPS={reader.header.frameRate}");
+
+                // Test Keyframe decode (Frame 0)
+                reader.DecodeFrame(0);
+                if (!reader.positions.IsCreated || reader.positions.Length == 0)
+                    throw new System.Exception("Keyframe decode produced empty positions buffer.");
+
+                float3 p0 = new float3(
+                    math.asfloat(reader.positions[0]),
+                    math.asfloat(reader.positions[1]),
+                    math.asfloat(reader.positions[2])
+                );
+                Debug.Log($"[4DGS Validator] Frame 0 decoded successfully. Splat 0 position: {p0}");
+
+                // Test P-Frame delta decode (Frame 1)
+                reader.DecodeFrame(1);
+                float3 p1 = new float3(
+                    math.asfloat(reader.positions[0]),
+                    math.asfloat(reader.positions[1]),
+                    math.asfloat(reader.positions[2])
+                );
+                Debug.Log($"[4DGS Validator] Frame 1 decoded successfully. Splat 0 position after delta: {p1}");
+
+                // Test GOP jump (Frame 30)
+                reader.DecodeFrame(30);
+                Debug.Log($"[4DGS Validator] Frame 30 (GOP Keyframe) decoded successfully.");
+
+                // Test End of sequence (Frame 59)
+                reader.DecodeFrame(59);
+                Debug.Log($"[4DGS Validator] Frame 59 (End of Clip) decoded successfully.");
+
+                Debug.Log("<color=green>[4DGS Validator] ALL 4DGS TESTS PASSED SUCCESSFULLY!</color>");
+                EditorUtility.DisplayDialog("4DGS Validator", "All 4DGS reader, Zstd decompression, and Burst delta tests PASSED!", "OK");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[4DGS Validator] Validation failed: {e.Message}\n{e.StackTrace}");
+                EditorUtility.DisplayDialog("4DGS Validator Error", $"Validation failed: {e.Message}", "OK");
+            }
+        }
+
         static ValidationRun s_Run;
 
         static void ValidateImpl(string refPrefix)

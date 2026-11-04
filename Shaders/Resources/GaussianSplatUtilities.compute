@@ -7,6 +7,8 @@
 #pragma kernel UpsweepWebGpu
 #pragma kernel ScanWebGpu
 #pragma kernel DownsweepWebGpu
+#pragma kernel CSDecodeVideoSplats
+#pragma kernel CSApply4DDelta
 
 #include "GaussianSplatting.hlsl"
 #include "WebGpuRadixSort.hlsl"
@@ -107,4 +109,87 @@ void CSCalcViewData (uint3 id : SV_DispatchThreadID)
         _SplatSortDistances[outputIndex] = FloatToSortableUint(depth);
         _SplatSortKeys[outputIndex] = outputIndex;
     }
+}
+
+// ----------------------------------------------------------------------------
+// Video-Texture Splatting Decoder (WebGPU hardware video decode -> splat buffers)
+// ----------------------------------------------------------------------------
+Texture2D<float4> _SplatVideoTex;
+uint _VideoGridWidth;
+uint _VideoGridHeight;
+float3 _BoundsMin;
+float3 _BoundsMax;
+float2 _ScaleMinMax;
+
+[numthreads(GROUP_SIZE,1,1)]
+void CSDecodeVideoSplats (uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= _SplatCount)
+        return;
+
+    uint gx = idx % _VideoGridWidth;
+    uint gy = idx / _VideoGridWidth;
+
+    float4 posHigh = _SplatVideoTex.Load(int3(gx, gy + _VideoGridHeight, 0));
+    float4 posLow  = _SplatVideoTex.Load(int3(gx + _VideoGridWidth, gy + _VideoGridHeight, 0));
+    float4 rotScl  = _SplatVideoTex.Load(int3(gx, gy, 0));
+    float4 colOpa  = _SplatVideoTex.Load(int3(gx + _VideoGridWidth, gy, 0));
+
+    float3 normPos = (floor(posHigh.rgb * 255.0 + 0.5) * 256.0 + floor(posLow.rgb * 255.0 + 0.5)) / 65535.0;
+    float3 pos = lerp(_BoundsMin, _BoundsMax, normPos);
+
+    _SplatPos.Store3(idx * 12, asuint(pos));
+
+    float3 scale = exp(lerp(_ScaleMinMax.x, _ScaleMinMax.y, rotScl.bbb));
+    float opacity = colOpa.a > 0.0 ? colOpa.a : (posLow.a > 0.0 ? posLow.a : 1.0);
+
+    uint packedRot = EncodeOctahedralToSpzRotation(rotScl.rg);
+    uint scaleXY = f32tof16(scale.x) | (f32tof16(scale.y) << 16);
+    uint scaleZOp = f32tof16(scale.z) | (f32tof16(opacity) << 16);
+
+    _SplatOther.Store3(idx * 12, uint3(packedRot, scaleXY, scaleZOp));
+    _SplatColor.Store(idx * 4, PackColorRGB10E2(colOpa.rgb));
+}
+
+// ----------------------------------------------------------------------------
+// GPU-side 4DGS Delta Application
+// ----------------------------------------------------------------------------
+ByteAddressBuffer _DeltaStream;
+float _DeltaPosScale;
+uint _DeltaFlags;
+
+[numthreads(GROUP_SIZE,1,1)]
+void CSApply4DDelta (uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= _SplatCount)
+        return;
+
+    uint maskBytes = (_SplatCount + 7u) >> 3;
+    uint maskByteOffset = 8u + (idx >> 3);
+    uint maskWord = _DeltaStream.Load(maskByteOffset & ~3u);
+    uint shift = ((maskByteOffset & 3u) * 8u) + (idx & 7u);
+    if (((maskWord >> shift) & 1u) == 0u)
+        return;
+
+    uint int16Offset = 8u + maskBytes;
+    uint dxOffset = int16Offset + idx * 2u;
+    uint dyOffset = int16Offset + (_SplatCount + idx) * 2u;
+    uint dzOffset = int16Offset + (_SplatCount * 2u + idx) * 2u;
+
+    uint rawX = (_DeltaStream.Load(dxOffset & ~3u) >> ((dxOffset & 2u) * 8u)) & 0xFFFFu;
+    uint rawY = (_DeltaStream.Load(dyOffset & ~3u) >> ((dyOffset & 2u) * 8u)) & 0xFFFFu;
+    uint rawZ = (_DeltaStream.Load(dzOffset & ~3u) >> ((dzOffset & 2u) * 8u)) & 0xFFFFu;
+
+    int dx = (int)rawX; if (dx >= 32768) dx -= 65536;
+    int dy = (int)rawY; if (dy >= 32768) dy -= 65536;
+    int dz = (int)rawZ; if (dz >= 32768) dz -= 65536;
+
+    float3 pos = asfloat(_SplatPos.Load3(idx * 12u));
+    pos.x += dx * _DeltaPosScale;
+    pos.y += dy * _DeltaPosScale;
+    pos.z += dz * _DeltaPosScale;
+
+    _SplatPos.Store3(idx * 12u, asuint(pos));
 }

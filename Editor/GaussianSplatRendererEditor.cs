@@ -14,7 +14,10 @@ namespace GaussianSplatting.Editor
     [CanEditMultipleObjects]
     public class GaussianSplatRendererEditor : UnityEditor.Editor
     {
+        SerializedProperty m_PropSourceType;
         SerializedProperty m_PropSourcePath;
+        SerializedProperty m_PropSplatAsset;
+        SerializedProperty m_PropTextAsset;
         SerializedProperty m_PropRenderOrder;
         SerializedProperty m_PropSplatScale;
         SerializedProperty m_PropOpacityScale;
@@ -26,7 +29,10 @@ namespace GaussianSplatting.Editor
 
         public void OnEnable()
         {
+            m_PropSourceType = serializedObject.FindProperty("m_SourceType");
             m_PropSourcePath = serializedObject.FindProperty("m_SourcePath");
+            m_PropSplatAsset = serializedObject.FindProperty("m_SplatAsset");
+            m_PropTextAsset = serializedObject.FindProperty("m_TextAsset");
             m_PropRenderOrder = serializedObject.FindProperty("m_RenderOrder");
             m_PropSplatScale = serializedObject.FindProperty("m_SplatScale");
             m_PropOpacityScale = serializedObject.FindProperty("m_OpacityScale");
@@ -42,28 +48,60 @@ namespace GaussianSplatting.Editor
                 return;
 
             serializedObject.Update();
+
+            GUILayout.Label("Source Configuration", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_PropSourceType, new GUIContent("Source Type"));
+
+            var sourceType = (GaussianSplatSourceType)m_PropSourceType.enumValueIndex;
             var source = m_PropSourcePath;
             string sourcePath = source.stringValue;
-            GUILayout.Label("Source File", EditorStyles.boldLabel);
-            Rect rect = EditorGUILayout.GetControlRect();
-            EditorGUI.showMixedValue = source.hasMultipleDifferentValues;
-            string path = m_FilePicker.PathFieldGUI(rect, new GUIContent("PLY / SPZ"), sourcePath);
-            EditorGUI.showMixedValue = false;
-            if (path != sourcePath)
+
+            switch (sourceType)
             {
-                sourcePath = path;
-                source.stringValue = sourcePath;
-            }
-            if (!source.hasMultipleDifferentValues && string.IsNullOrWhiteSpace(sourcePath))
-                EditorGUILayout.HelpBox("Gaussian Splat source file is not assigned", MessageType.Error);
-            else if (!source.hasMultipleDifferentValues)
-            {
-                try
+                case GaussianSplatSourceType.FileOrUrl:
                 {
-                    string full = GaussianSplatReader.ResolvePath(Application.streamingAssetsPath, sourcePath);
-                    if (!GaussianSplatPaths.IsUrl(full) && !File.Exists(full)) EditorGUILayout.HelpBox("Source file is missing: " + full, MessageType.Warning);
+                    Rect rect = EditorGUILayout.GetControlRect();
+                    EditorGUI.showMixedValue = source.hasMultipleDifferentValues;
+                    string path = m_FilePicker.PathFieldGUI(rect, new GUIContent("PLY / SPZ"), sourcePath);
+                    EditorGUI.showMixedValue = false;
+                    if (path != sourcePath)
+                    {
+                        sourcePath = path;
+                        source.stringValue = sourcePath;
+                    }
+                    if (!source.hasMultipleDifferentValues && string.IsNullOrWhiteSpace(sourcePath))
+                        EditorGUILayout.HelpBox("Gaussian Splat source file is not assigned", MessageType.Error);
+                    else if (!source.hasMultipleDifferentValues)
+                    {
+                        try
+                        {
+                            string full = GaussianSplatReader.ResolvePath(Application.streamingAssetsPath, sourcePath);
+                            if (!GaussianSplatPaths.IsUrl(full) && !File.Exists(full))
+                                EditorGUILayout.HelpBox("Source file is missing: " + full, MessageType.Warning);
+                        }
+                        catch (Exception e) { EditorGUILayout.HelpBox(e.Message, MessageType.Error); }
+                    }
+                    break;
                 }
-                catch (Exception e) { EditorGUILayout.HelpBox(e.Message, MessageType.Error); }
+                case GaussianSplatSourceType.SplatAsset:
+                {
+                    EditorGUILayout.PropertyField(m_PropSplatAsset, new GUIContent("Splat Asset"));
+                    if (!m_PropSplatAsset.hasMultipleDifferentValues && m_PropSplatAsset.objectReferenceValue == null)
+                        EditorGUILayout.HelpBox("Assign a baked/imported GaussianSplatAsset (.spz or .ply asset).", MessageType.Info);
+                    break;
+                }
+                case GaussianSplatSourceType.TextAssetBytes:
+                {
+                    EditorGUILayout.PropertyField(m_PropTextAsset, new GUIContent("TextAsset (.bytes)"));
+                    if (!m_PropTextAsset.hasMultipleDifferentValues && m_PropTextAsset.objectReferenceValue == null)
+                        EditorGUILayout.HelpBox("Assign a TextAsset containing raw bytes (.spz.bytes or .ply.bytes).", MessageType.Info);
+                    break;
+                }
+                case GaussianSplatSourceType.ExternalStreamOr4D:
+                {
+                    EditorGUILayout.HelpBox("Buffers are controlled dynamically by GaussianSplat4DPlayer, GaussianSplatVideoPlayer, or GaussianSplatStreamReceiver.", MessageType.Info);
+                    break;
+                }
             }
 
             EditorGUILayout.Space();
@@ -74,7 +112,16 @@ namespace GaussianSplatting.Editor
             EditorGUILayout.PropertyField(m_PropSHOrder);
 
             EditorGUILayout.Space();
-            bool validAndEnabled = gs && gs.enabled && gs.gameObject.activeInHierarchy && !string.IsNullOrWhiteSpace(sourcePath);
+            bool hasValidSource = sourceType switch
+            {
+                GaussianSplatSourceType.FileOrUrl => !string.IsNullOrWhiteSpace(sourcePath),
+                GaussianSplatSourceType.SplatAsset => m_PropSplatAsset.objectReferenceValue != null,
+                GaussianSplatSourceType.TextAssetBytes => m_PropTextAsset.objectReferenceValue != null,
+                GaussianSplatSourceType.ExternalStreamOr4D => true,
+                _ => false
+            };
+
+            bool validAndEnabled = gs && gs.enabled && gs.gameObject.activeInHierarchy && hasValidSource;
             if (validAndEnabled && !gs.HasValidRenderResources)
             {
                 EditorGUILayout.HelpBox("Shader resources are not set up", MessageType.Error);
@@ -83,7 +130,17 @@ namespace GaussianSplatting.Editor
 
             bool sourceChanged = false;
             foreach (var obj in targets)
-                sourceChanged |= !source.hasMultipleDifferentValues && ((GaussianSplatRenderer)obj).m_SourcePath != sourcePath;
+            {
+                var targetGs = (GaussianSplatRenderer)obj;
+                sourceChanged |= targetGs.m_SourceType != sourceType;
+                if (sourceType == GaussianSplatSourceType.FileOrUrl)
+                    sourceChanged |= !source.hasMultipleDifferentValues && targetGs.m_SourcePath != sourcePath;
+                else if (sourceType == GaussianSplatSourceType.SplatAsset)
+                    sourceChanged |= !m_PropSplatAsset.hasMultipleDifferentValues && targetGs.m_SplatAsset != m_PropSplatAsset.objectReferenceValue;
+                else if (sourceType == GaussianSplatSourceType.TextAssetBytes)
+                    sourceChanged |= !m_PropTextAsset.hasMultipleDifferentValues && targetGs.m_TextAsset != m_PropTextAsset.objectReferenceValue;
+            }
+
             serializedObject.ApplyModifiedProperties();
             if (GUILayout.Button("Reload") || sourceChanged)
                 foreach (var obj in targets) ((GaussianSplatRenderer)obj).Reload();

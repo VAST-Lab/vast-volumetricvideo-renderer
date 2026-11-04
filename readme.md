@@ -1,37 +1,54 @@
-# Unity 6000.6 Gaussian Splatting (WebGPU + v2.0.0 Unified Package)
+# Unity 6000.6 Gaussian Splatting & 4DGS Volumetric Video (v3.0.0 WebGPU)
 
-A unified Unity 6000.6 package combining **[aras-p/UnityGaussianSplatting](https://github.com/aras-p/UnityGaussianSplatting) v2.0.0** with **WebGPU compatibility**, **Subgroup-Free WebGPU Compute Radix Sorting**, and **Hierarchical Octree + Native WASM/CPU Cached Sorting**.
+A unified Unity 6000.6+ package combining **3D Gaussian Splatting** and **4D Volumetric Video** with full **WebGPU compatibility**, **Subgroup-Free GPU Radix Sorting**, **Multi-Source Asset Packaging**, and **Temporal GOP Delta Streaming**.
 
-## Key Features
-- **Direct Runtime & Edit-Mode Loading (`GaussianSplatLoadOperation`)**:
-  - Loads `.ply` and `.spz` (versions 1–4, including Zstd-compressed SPZ v4 and GZip-compressed SPZ v1–3) directly from `StreamingAssets`, local file paths, or remote `http://`/`https://` URLs without requiring offline ScriptableObject baking.
-  - Uses time-sliced main-thread GZip decompression on WebGL/WebGPU (`UNITY_WEBGL`) and Burst-compiled data preparation (`GaussianSplatPrepareDataJob`).
-- **Ultra-Compact GPU Layout (`GaussianSplatData`)**:
-  - 28 bytes/splat base data + 0/8/16/32 bytes/splat for SH degrees 0–3 (28–60 bytes/splat total).
+---
+
+## What's New in v3.0.0 (4DGS & itch.io Ready)
+
+### 1. 4DGS Volumetric Video Playback (`GaussianSplat4DPlayer`)
+- **Custom `.4dgs` Container**: Group-of-Pictures (GOP) temporal delta compression combining SPZ v4 keyframes with Burst-compiled `int16` position and quaternion deltas. Achieves **15x–40x compression** (~3–8 MB/sec at 30 FPS) with zero visual ringing.
+- **In-Place Dynamic GPU Updates**: Eliminates per-frame `GraphicsBuffer` reallocation and garbage collection. Dynamically updates GPU VRAM at 30–60 FPS.
+- **Sequence Playback**: Direct playback support for sequences of `.spz` or `.ply` files for rapid iteration during authoring.
+
+### 2. MP4 Video-Texture Splatting ("SplatVideo") (`GaussianSplatVideoPlayer`)
+- Offloads decompression entirely to the browser's native hardware video decoder (H.264/VP9/AV1).
+- Samples a 4-quadrant video atlas ($2W \times 2H$) directly in a compute shader (`CSDecodeVideoSplats`) on WebGPU, updating splat buffers directly in VRAM with **zero CPU/WASM overhead**.
+
+### 3. Live Host-to-Web Streaming (`GaussianSplatStreamReceiver`)
+- Real-time binary WebSocket streaming protocol (`"SGST"`) with jitter buffer for streaming volumetric sequences from desktop/cloud capture rigs to WebGPU clients.
+- Dual-platform implementation: `ClientWebSocket` on Desktop/Editor and native browser bridge (`WebSocketBridge.jslib`) on WebGL/WebGPU.
+- In-Editor server (`Tools > Gaussian Splats > 4DGS Stream Server`) and standalone Python server (`tools/stream_ply_sequence.py`).
+
+### 4. Multi-Source Static 3DGS Loading (`GaussianSplatAsset`)
+- **Mode A: `GaussianSplatAsset` (`ScriptableObject`)**: Embeds SPZ v4 compressed bytes directly into Unity scenes, prefabs, or Addressable bundles.
+- **Mode B: `TextAsset` (`.spz.bytes` / `.ply.bytes`)**: Zero-config binary bundling.
+- **Mode C: `StreamingAssets` / File / URL**: Existing file path workflow.
+- **Mode D: Browser Drag-and-Drop (`WebFileUpload.jslib`)**: Drag `.ply`, `.spz`, or `.4dgs` files directly onto the WebGPU canvas in the browser.
+
+### 5. Unified 3D Mesh + Static 3DGS + Animated 4DGS Composition
+- Static environments and animated 4D actors share the global radix sorting buffer (`GaussianSplatRenderSystem`) and test against the scene hardware depth buffer.
+- Dynamic actors interpenetrate cleanly with static splat rooms and 3D meshes with zero sorting seams!
+
+---
+
+## Core Features
 - **Dual Sorting Backends (`SortingMode` in `GaussianSplatRenderingOptions`)**:
-  - **`GpuRadixSort` (Default via `Auto`)**:
-    - Uses fast SM 6.0 Wave-Intrinsic `DeviceRadixSort` (`GaussianSplatSortWave.compute`) on supported desktop GPUs.
-    - Automatically falls back to **Subgroup-Free Compute Radix Sort** (`WebGpuRadixSort.hlsl` in `GaussianSplatUtilities.compute`, using `[numthreads(256, 1, 1)]` and `groupshared` memory scans with zero wave intrinsics) on **WebGPU**.
-  - **`OctreeCpuSort`**:
-    - Hierarchical local-space octree frustum culling (`GaussianSplatOctree`) with outlier filtering, cached per-leaf distance sorting, and non-blocking native Emscripten `pthread` worker sorting (`NativeSorting.c`) on WebGL/WebGPU or C# `Task` workers on desktop.
-- **SteadySplats Reprojected Stochastic Transparency (`GaussianSplatTemporalAccumulator`)**:
-  - Sort-free stochastic rendering with depth-guided neighborhood clamping and camera reprojection, plus Built-in RP, URP 17 (`RenderGraph`), and HDRP 17 support.
+  - **`GpuRadixSort` (Default via `Auto`)**: Fast wave-intrinsic sorting on desktop GPUs; automatically falls back to **Subgroup-Free Compute Radix Sort** (`WebGpuRadixSort.hlsl`) on **WebGPU**.
+  - **`OctreeCpuSort`**: Frustum culling and distance sorting with multi-threaded WASM workers (`NativeSorting.c`) on WebGL/WebGPU.
+- **SteadySplats Reprojected Stochastic Transparency (`GaussianSplatTemporalAccumulator`)**: Sort-free stochastic rendering with depth-guided neighborhood clamping and reprojection across Built-in RP, URP 17, and HDRP 17.
 
-## Quick Start
-1. Add a **`GaussianSplatRenderer`** component to a GameObject and assign `m_SourcePath` to a `.ply` or `.spz` file (relative to `Assets/StreamingAssets`, a local path, or a URL).
-2. *(Optional)* Add a **`GaussianSplatRenderingOptions`** component to your scene to configure:
-   - **Transparency Mode**: `SortedBlended` or `Stochastic` (with `Reprojected` temporal accumulation).
-   - **Sorting Mode**: `Auto`, `GpuRadixSort`, or `OctreeCpuSort`.
-   - **Octree Settings**: `m_OctreeMaxDepth`, `m_OctreeMaxSplatsPerLeaf`, `m_OctreeCullingUpdateInterval`, `m_OctreeSplatRatio`, and `m_DrawOctreeGizmos`.
+---
 
-## WebGPU Threading Setup (When Using `OctreeCpuSort`)
-For multi-threaded WASM sorting in `OctreeCpuSort` mode on WebGPU:
-1. **Unity Settings**: Enable **"Native C++ Threads Support"** in Project Settings > Player > WebGL/WebGPU Publishing Settings.
-2. **Web Server**: Serve with COOP/COEP headers for `SharedArrayBuffer` support:
-   ```
-   Cross-Origin-Opener-Policy: same-origin
-   Cross-Origin-Embedder-Policy: require-corp
-   ```
+## Editor Tools
+- **4DGS Sequence Baker** (`Tools > Gaussian Splats > 4DGS Sequence Baker`):
+  Bakes a folder of PLY/SPZ frames into a `.4dgs` container file with 3D Morton curve sorting and temporal deltas, or exports MP4 Video Atlas frames.
+- **4DGS Stream Server** (`Tools > Gaussian Splats > 4DGS Stream Server`):
+  Hosts a local WebSocket server broadcasting frames at 30 FPS.
+- **Validator** (`Tools > Gaussian Splats > Debug > Validate 4DGS Decoder Pipeline`):
+  Automated testing of the 4DGS container reader, Zstd decompression, and Burst delta pipeline.
+
+---
 
 ## License
-See `LICENSE.md`.
+See `LICENSE.txt`.

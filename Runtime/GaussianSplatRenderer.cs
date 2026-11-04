@@ -574,11 +574,28 @@ namespace GaussianSplatting.Runtime
         }
     }
 
+    public enum GaussianSplatSourceType
+    {
+        FileOrUrl,          // StreamingAssets, local disk path, or HTTP/HTTPS URL
+        SplatAsset,         // ScriptableObject GaussianSplatAsset containing compressed SPZ v4
+        TextAssetBytes,     // Unity TextAsset containing raw .spz or .ply bytes (.spz.bytes)
+        ExternalStreamOr4D  // Controlled by GaussianSplat4DPlayer, VideoPlayer, or StreamReceiver
+    }
+
     [ExecuteInEditMode]
     public class GaussianSplatRenderer : MonoBehaviour
     {
+        [Tooltip("Source loading mode for static 3DGS or 4DGS volumetric video")]
+        public GaussianSplatSourceType m_SourceType = GaussianSplatSourceType.FileOrUrl;
+
         [Tooltip("Path relative to StreamingAssets or current directory, an absolute path, or a URL")]
         public string m_SourcePath;
+
+        [Tooltip("Pre-baked GaussianSplatAsset ScriptableObject (SPZ v4 compressed)")]
+        public GaussianSplatAsset m_SplatAsset;
+
+        [Tooltip("TextAsset binary file (.spz.bytes or .ply.bytes)")]
+        public TextAsset m_TextAsset;
 
         // Call after any runtime changes that affect splat visibility / history
         public void InvalidateTemporalHistory() => GaussianSplatRenderSystem.instance.InvalidateTemporalHistory();
@@ -602,9 +619,17 @@ namespace GaussianSplatting.Runtime
         GraphicsBuffer m_GpuColorData;
         NativeArray<float3> m_LocalPositions;
         string m_PrevSourcePath;
+        GaussianSplatSourceType m_PrevSourceType;
+        GaussianSplatAsset m_PrevSplatAsset;
+        TextAsset m_PrevTextAsset;
         GaussianSplatLoadOperation m_LoadOperation;
         int m_SHCoefficients;
         bool m_Registered;
+
+        public GraphicsBuffer gpuPosData => m_GpuPosData;
+        public GraphicsBuffer gpuOtherData => m_GpuOtherData;
+        public GraphicsBuffer gpuColorData => m_GpuColorData;
+        public GraphicsBuffer gpuSHData => m_GpuSHData;
 
         // Octree culling and CPU/WASM cached sorting state
         internal GaussianSplatOctree m_Octree;
@@ -788,19 +813,95 @@ namespace GaussianSplatting.Runtime
             Reload();
         }
 
+        public void AllocateDynamicBuffers(int maxSplatCount, int maxSHDegree)
+        {
+            DisposeResources();
+            m_SplatCount = maxSplatCount;
+            sourceSHDegree = maxSHDegree;
+            m_SHCoefficients = (maxSHDegree + 1) * (maxSHDegree + 1) - 1;
+            int shWords = m_SHCoefficients == 0 ? 1 : maxSplatCount * (GaussianUtils.GetSHDataSize(m_SHCoefficients) / 4);
+
+            m_GpuPosData = new GraphicsBuffer(GraphicsBuffer.Target.Raw, maxSplatCount * 3, 4) { name = "GaussianPosData_4D" };
+            m_GpuOtherData = new GraphicsBuffer(GraphicsBuffer.Target.Raw, maxSplatCount * 3, 4) { name = "GaussianOtherData_4D" };
+            m_GpuColorData = new GraphicsBuffer(GraphicsBuffer.Target.Raw, maxSplatCount, 4) { name = "GaussianColorData_4D" };
+            m_GpuSHData = new GraphicsBuffer(GraphicsBuffer.Target.Raw, shWords, 4) { name = "GaussianSHData_4D" };
+
+            if (m_LocalPositions.IsCreated)
+                m_LocalPositions.Dispose();
+            m_LocalPositions = new NativeArray<float3>(maxSplatCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+
+            EnsureRegistered();
+        }
+
+        public void UpdateDynamicFrame(
+            int activeSplatCount,
+            Bounds frameBounds,
+            NativeArray<uint> pos,
+            NativeArray<uint> other,
+            NativeArray<uint> color,
+            NativeArray<uint> sh,
+            bool updateSH = true)
+        {
+            if (activeSplatCount <= 0 || m_GpuPosData == null)
+                return;
+
+            m_SplatCount = activeSplatCount;
+            localBounds = frameBounds;
+
+            m_GpuPosData.SetData(pos, 0, 0, activeSplatCount * 3);
+            m_GpuOtherData.SetData(other, 0, 0, activeSplatCount * 3);
+            m_GpuColorData.SetData(color, 0, 0, activeSplatCount);
+            if (updateSH && sh.IsCreated && m_SHCoefficients > 0 && m_GpuSHData != null)
+            {
+                int shWords = activeSplatCount * (GaussianUtils.GetSHDataSize(m_SHCoefficients) / 4);
+                m_GpuSHData.SetData(sh, 0, 0, shWords);
+            }
+
+            if (m_LocalPositions.IsCreated && pos.IsCreated)
+            {
+                var floatPositions = pos.Reinterpret<float3>(4);
+                m_LocalPositions.GetSubArray(0, activeSplatCount).CopyFrom(floatPositions.GetSubArray(0, activeSplatCount));
+                if (m_OctreeBuilt && m_Octree != null)
+                    m_Octree.InvalidateAllSorts();
+            }
+
+            GaussianSplatRenderSystem.instance.InvalidateTemporalHistory();
+        }
+
         public void Reload()
         {
             FinishLoading();
             m_PrevSourcePath = m_SourcePath;
+            m_PrevSourceType = m_SourceType;
+            m_PrevSplatAsset = m_SplatAsset;
+            m_PrevTextAsset = m_TextAsset;
             DisposeResources();
             loadError = null;
             cameras = Array.Empty<GaussianSplatCameras.CameraInfo>();
-            if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(m_SourcePath)) return;
+            if (!isActiveAndEnabled) return;
             try
             {
                 if (!resourcesAreSetUp) throw new InvalidOperationException("Shader resources are missing");
                 EnsureRegistered();
-                m_LoadOperation = new GaussianSplatLoadOperation(Application.streamingAssetsPath, m_SourcePath);
+
+                switch (m_SourceType)
+                {
+                    case GaussianSplatSourceType.FileOrUrl:
+                        if (string.IsNullOrWhiteSpace(m_SourcePath)) return;
+                        m_LoadOperation = new GaussianSplatLoadOperation(Application.streamingAssetsPath, m_SourcePath);
+                        break;
+                    case GaussianSplatSourceType.SplatAsset:
+                        if (m_SplatAsset == null || !m_SplatAsset.isValid) return;
+                        m_LoadOperation = new GaussianSplatLoadOperation(m_SplatAsset.compressedData, m_SplatAsset.camerasJson);
+                        break;
+                    case GaussianSplatSourceType.TextAssetBytes:
+                        if (m_TextAsset == null || m_TextAsset.bytes == null || m_TextAsset.bytes.Length == 0) return;
+                        m_LoadOperation = new GaussianSplatLoadOperation(m_TextAsset.bytes);
+                        break;
+                    case GaussianSplatSourceType.ExternalStreamOr4D:
+                        return;
+                }
+
                 isLoading = true;
 #if UNITY_EDITOR
                 UnityEditor.EditorApplication.update += EditorUpdateLoading;
@@ -928,7 +1029,15 @@ namespace GaussianSplatting.Runtime
 
         public void Update()
         {
-            if (m_PrevSourcePath != m_SourcePath) Reload();
+            bool sourceChanged = m_PrevSourceType != m_SourceType;
+            if (m_SourceType == GaussianSplatSourceType.FileOrUrl)
+                sourceChanged |= m_PrevSourcePath != m_SourcePath;
+            else if (m_SourceType == GaussianSplatSourceType.SplatAsset)
+                sourceChanged |= m_PrevSplatAsset != m_SplatAsset;
+            else if (m_SourceType == GaussianSplatSourceType.TextAssetBytes)
+                sourceChanged |= m_PrevTextAsset != m_TextAsset;
+
+            if (sourceChanged) Reload();
 #if UNITY_EDITOR
             if (!Application.isPlaying) return;
 #endif

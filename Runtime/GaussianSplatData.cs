@@ -7,12 +7,15 @@ using UnityEngine;
 namespace GaussianSplatting.Runtime
 {
     // CPU side buffers for uploading the splat data to the GPU.
-    // Disposed after the upload.
-    sealed class GaussianSplatData : IDisposable
+    // Disposed after the upload, or pooled for 4DGS frame rings.
+    public sealed class GaussianSplatData : IDisposable
     {
-        public readonly int count, shDegree, shCoefficients;
+        public int count { get; internal set; }
+        public int shDegree { get; internal set; }
+        public int shCoefficients { get; internal set; }
         public NativeArray<uint> positions, geometry, colors, sh;
         public Bounds bounds;
+        public bool isPooled;
 
         public GaussianSplatData(int count, int degree)
         {
@@ -38,10 +41,17 @@ namespace GaussianSplatting.Runtime
 
         public void Dispose()
         {
+            if (isPooled) return;
             if (positions.IsCreated) positions.Dispose();
             if (geometry.IsCreated) geometry.Dispose();
             if (colors.IsCreated) colors.Dispose();
             if (sh.IsCreated) sh.Dispose();
+        }
+
+        public void ForceDispose()
+        {
+            isPooled = false;
+            Dispose();
         }
     }
 }

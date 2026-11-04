@@ -174,6 +174,55 @@ float4 DecodeSpzSmallest3Rotation(uint packed)
     return q;
 }
 
+uint PackColorRGB10E2(float3 color)
+{
+    color = clamp(color + 0.3125, 0.0, 3.99609375);
+    float maxColor = max(max(color.r, color.g), color.b);
+    int exponent = max(0, (int)(asuint(maxColor) >> 23) - 125);
+    float scale = asfloat((uint)(exponent + 116) << 23); // 2^(exponent - 11)
+    if (floor(maxColor / scale + 0.5) >= 1024.0)
+    {
+        ++exponent;
+        scale *= 2.0;
+    }
+    uint3 mantissa = (uint3)floor(color / scale + 0.5);
+    return mantissa.x | (mantissa.y << 10) | (mantissa.z << 20) | ((uint)exponent << 30);
+}
+
+uint EncodeSpzSmallest3Rotation(float4 rotation)
+{
+    float4 absRot = abs(rotation);
+    int largest = 0;
+    if (absRot.y > absRot.x) largest = 1;
+    if (absRot.z > absRot[largest]) largest = 2;
+    if (absRot.w > absRot[largest]) largest = 3;
+
+    if (rotation[largest] < 0.0) rotation = -rotation;
+    uint packed = (uint)largest;
+    for (int c = 0; c < 4; ++c)
+    {
+        if (c == largest) continue;
+        uint magnitude = (uint)(511.0 * (abs(rotation[c]) / 0.7071067811865475) + 0.5);
+        uint sign = rotation[c] < 0.0 ? 512u : 0u;
+        packed = (packed << 10) | sign | magnitude;
+    }
+    return packed;
+}
+
+uint EncodeOctahedralToSpzRotation(float2 oct)
+{
+    float2 e = oct * 2.0 - 1.0;
+    float3 v = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0)
+    {
+        v.xy = (1.0 - abs(v.yx)) * (v.xy >= 0.0 ? float2(1.0, 1.0) : float2(-1.0, -1.0));
+    }
+    v = normalize(v);
+    float4 q = float4(v.x, v.y, v.z, 0.0);
+    q = normalize(q + float4(0, 0, 0, 1));
+    return EncodeSpzSmallest3Rotation(q);
+}
+
 #ifdef SHADER_STAGE_COMPUTE
 #define SplatBufferDataType RWByteAddressBuffer
 #else
