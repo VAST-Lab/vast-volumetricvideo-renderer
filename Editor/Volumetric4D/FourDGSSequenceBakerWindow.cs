@@ -88,7 +88,7 @@ namespace GaussianSplatting.Editor
             if (m_IsBaking)
             {
                 EditorGUILayout.Space();
-                EditorGUILayout.ProgressBar(m_Progress, m_StatusMessage);
+                EditorGUI.ProgressBar(new Rect(3, 45, position.width - 6, 20), m_Progress, m_StatusMessage);
             }
             else if (!string.IsNullOrEmpty(m_StatusMessage))
             {

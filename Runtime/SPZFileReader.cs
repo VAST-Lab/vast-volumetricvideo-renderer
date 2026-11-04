@@ -3,12 +3,11 @@ using System.IO;
 using System.Text;
 using Unity.Burst;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 
 namespace GaussianSplatting.Runtime
 {
-    static class SPZFileReader
+    public static class SPZFileReader
     {
         public struct Header
         {

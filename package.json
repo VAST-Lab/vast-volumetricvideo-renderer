@@ -1,16 +1,16 @@
 {
-  "name": "com.vastlab.vast-volumetricvideo-renderer",
-  "version": "3.0.0",
-  "displayName": "VAST Lab Volumetric Video Renderer",
-  "description": "A Unity 6000.6 package for VAST Lab 3D/4D Gaussian Splatting and Volumetric Video projects with WebGPU support.",
-  "unity": "6000.6",
-  "author": {
-    "name": "Brandon Coffey",
-    "email": "brandon.coffey@utdallas.edu"
-  },
-  "dependencies": {
-    "com.unity.burst": "1.8.8",
-    "com.unity.collections": "2.1.4",
-    "com.unity.mathematics": "1.2.6"
-  }
+	"name": "com.vastlab.vast-volumetricvideo-renderer",
+	"version": "3.0.0",
+	"displayName": "VAST Lab Volumetric Video Renderer",
+	"description": "A Unity 6000.6 package for VAST Lab 3D/4D Gaussian Splatting and Volumetric Video projects with WebGPU support.",
+	"unity": "6000.6",
+	"author": {
+		"name": "Brandon Coffey",
+		"email": "brandon.coffey@utdallas.edu"
+	},
+	"dependencies": {
+		"com.unity.burst": "1.8.8",
+		"com.unity.collections": "2.1.4",
+		"com.unity.mathematics": "1.2.6"
+	}
 }

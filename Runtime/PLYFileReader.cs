@@ -8,7 +8,7 @@ using Unity.Collections;
 
 namespace GaussianSplatting.Runtime
 {
-    static class PLYFileReader
+    public static class PLYFileReader
     {
         public struct Header : IDisposable
         {
