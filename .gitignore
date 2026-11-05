@@ -1,0 +1,8 @@
+.idea/
+.vscode/
+*.slnx
+.slnx
+.DS_Store
+Thumbs.db
+*.user
+*.userprefs
