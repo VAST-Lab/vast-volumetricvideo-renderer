@@ -276,8 +276,11 @@ namespace GaussianSplatting.Runtime
                 // check view data buffer against maximum supported by system
                 long bytes = count * kGpuViewDataSize;
                 long limit = SystemInfo.maxGraphicsBufferSize;
+#if UNITY_WEBGL && !UNITY_EDITOR
+    limit = Math.Min(limit, 134217728L);
+#endif
                 if (count > int.MaxValue || bytes > limit)
-                    error = $"Cannot render all {count:N0} splats: shared view buffer needs {bytes:N0} bytes (max graphics buffer size {limit:N0})";
+                    error = $"Cannot render all {count:N0} splats: shared view buffer needs {bytes:N0} bytes (max buffer size {limit:N0})";
             }
 
             // radix sort dispatches one group per 3840 keys

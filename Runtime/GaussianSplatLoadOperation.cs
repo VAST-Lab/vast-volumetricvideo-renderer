@@ -19,41 +19,41 @@ namespace GaussianSplatting.Runtime
     // Advance the loading on the main thread.
     public sealed class GaussianSplatLoadOperation : IDisposable
     {
-        enum State { Downloading, Decompressing, DecompressingZstd, Converting, Cameras, Complete }
-        State m_State;
-        string m_CameraPath;
-        readonly string m_FallbackPath;
-        UnityWebRequest m_Request;
-        Stream m_Stream;
-        GZipStream m_Gzip;
-        PLYFileReader.Header m_Ply;
-        SPZFileReader.Header m_Spz;
-        NativeArray<byte> m_Input;
-        NativeArray<byte> m_Compressed, m_ZstdScratch;
-        NativeArray<SPZFileReader.StreamInfo> m_SpzStreams;
-        NativeArray<GaussianSplatPrepareDataJob.BatchResult> m_Results;
-        ReadHandle m_Read;
-        JobHandle m_Job;
-        int m_Start, m_BatchLength;
-        int m_DecompressedOffset;
-        float3 m_Min = new(float.PositiveInfinity), m_Max = new(float.NegativeInfinity);
-        GaussianSplatData m_Data;
-        Thread m_DecompressionThread;
-        volatile bool m_CancelDecompression;
-        Exception m_DecompressionError;
+        private enum State { Downloading, Decompressing, DecompressingZstd, Converting, Cameras, Complete }
+        private State m_State;
+        private string m_CameraPath;
+        private readonly string m_FallbackPath;
+        private UnityWebRequest m_Request;
+        private Stream m_Stream;
+        private GZipStream m_Gzip;
+        private PLYFileReader.Header m_Ply;
+        private SPZFileReader.Header m_Spz;
+        private NativeArray<byte> m_Input;
+        private NativeArray<byte> m_Compressed, m_ZstdScratch;
+        private NativeArray<SPZFileReader.StreamInfo> m_SpzStreams;
+        private NativeArray<GaussianSplatPrepareDataJob.BatchResult> m_Results;
+        private ReadHandle m_Read;
+        private JobHandle m_Job;
+        private int m_Start, m_BatchLength;
+        private int m_DecompressedOffset;
+        private float3 m_Min = new(float.PositiveInfinity), m_Max = new(float.NegativeInfinity);
+        private GaussianSplatData m_Data;
+        private Thread m_DecompressionThread;
+        private volatile bool m_CancelDecompression;
+        private Exception m_DecompressionError;
 
         public bool isDone => m_State == State.Complete;
         public GaussianSplatCameras.CameraInfo[] cameras { get; private set; } = Array.Empty<GaussianSplatCameras.CameraInfo>();
         public string cameraError { get; private set; }
 
-        public GaussianSplatLoadOperation(string rootFolder, string sourceFile)
+        public GaussianSplatLoadOperation(string rootFolder, string sourceFile, bool loadCameras = false)
         {
             try
             {
                 string path = GaussianSplatReader.ResolvePath(rootFolder, sourceFile);
                 if (GaussianSplatPaths.IsUrl(path))
                 {
-                    m_CameraPath = GaussianSplatPaths.ChangeExtension(path, ".json");
+                    m_CameraPath = loadCameras ? GaussianSplatPaths.ChangeExtension(path, ".json") : null;
                     if (!GaussianSplatPaths.IsUrl(sourceFile) && !Path.IsPathRooted(sourceFile))
                         m_FallbackPath = Path.GetFullPath(GaussianSplatPaths.ToForwardSlashes(sourceFile));
                     m_Request = UnityWebRequest.Get(path);
@@ -61,7 +61,7 @@ namespace GaussianSplatting.Runtime
                     m_State = State.Downloading;
                 }
                 else
-                    OpenLocalFile(path);
+                    OpenLocalFile(path, loadCameras);
             }
             catch { Dispose(); throw; }
         }
@@ -106,9 +106,9 @@ namespace GaussianSplatting.Runtime
             catch { Dispose(); throw; }
         }
 
-        void OpenLocalFile(string path)
+        private void OpenLocalFile(string path, bool loadCameras = true)
         {
-            m_CameraPath = GaussianSplatPaths.ChangeExtension(path, ".json");
+            m_CameraPath = loadCameras ? GaussianSplatPaths.ChangeExtension(path, ".json") : null;
             m_Stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
             ReadHeader();
         }
@@ -178,14 +178,14 @@ namespace GaussianSplatting.Runtime
         // transfer ownership once conversion is complete, allowing GPU upload before camera sidecar file finishes
         public GaussianSplatData TakeData()
         {
-            if (m_State != State.Cameras && m_State != State.Complete)
+            if (m_State != State.Complete)
                 return null;
             var data = m_Data;
             m_Data = null;
             return data;
         }
 
-        unsafe void ReadHeader()
+        private unsafe void ReadHeader()
         {
             long start = m_Stream.Position;
             int a = m_Stream.ReadByte(), b = m_Stream.ReadByte();
@@ -224,7 +224,7 @@ namespace GaussianSplatting.Runtime
             else throw new InvalidDataException("Expected binary PLY or SPZ (versions 1–4)");
         }
 
-        unsafe void StartZstdDecompression()
+        private unsafe void StartZstdDecompression()
         {
             m_SpzStreams = SPZFileReader.ReadStreams(m_Stream, m_Spz);
             m_Compressed = new NativeArray<byte>(checked((int)(m_Stream.Length - m_Stream.Position)), Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
@@ -252,14 +252,14 @@ namespace GaussianSplatting.Runtime
             m_State = State.DecompressingZstd;
         }
 
-        void DisposeZstdBuffers()
+        private void DisposeZstdBuffers()
         {
             if (m_Compressed.IsCreated) m_Compressed.Dispose();
             if (m_ZstdScratch.IsCreated) m_ZstdScratch.Dispose();
             if (m_SpzStreams.IsCreated) m_SpzStreams.Dispose();
         }
 
-        unsafe void Decompress()
+        private unsafe void Decompress()
         {
             try
             {
@@ -277,7 +277,7 @@ namespace GaussianSplatting.Runtime
             catch (Exception e) { m_DecompressionError = e; }
         }
 
-        unsafe bool DecompressSlice(int maxBytesPerFrame)
+        private unsafe bool DecompressSlice(int maxBytesPerFrame)
         {
             try
             {
@@ -306,7 +306,7 @@ namespace GaussianSplatting.Runtime
             }
         }
 
-        unsafe void StartConversion()
+        private unsafe void StartConversion()
         {
             JobHandle dependency = default;
             m_BatchLength = m_Spz.version != 0 ? m_Data.count : math.min(m_Input.Length / m_Ply.stride, m_Data.count - m_Start);
@@ -349,7 +349,7 @@ namespace GaussianSplatting.Runtime
             m_State = State.Converting;
         }
 
-        void FinishConversion()
+        private void FinishConversion()
         {
             m_Job.Complete();
             if (m_Read.IsValid())
@@ -375,47 +375,46 @@ namespace GaussianSplatting.Runtime
             m_State = State.Cameras;
         }
 
-        void ReadCameras()
+        private void ReadCameras()
         {
-            if (cameras != null && cameras.Length > 0)
+            if (string.IsNullOrEmpty(m_CameraPath) || (cameras != null && cameras.Length > 0))
             {
                 FinishCameras();
                 return;
             }
-
             if (m_Request != null)
             {
                 if (!m_Request.isDone) return;
                 if (m_Request.result == UnityWebRequest.Result.Success)
                     cameras = GaussianSplatCameras.Parse(m_Request.downloadHandler.text);
             }
-            else if (!string.IsNullOrEmpty(m_CameraPath) && GaussianSplatPaths.IsUrl(m_CameraPath))
+            else if (GaussianSplatPaths.IsUrl(m_CameraPath))
             {
                 m_Request = UnityWebRequest.Get(m_CameraPath);
                 m_Request.SendWebRequest();
                 return;
             }
-            else if (!string.IsNullOrEmpty(m_CameraPath) && File.Exists(m_CameraPath))
+            else if (File.Exists(m_CameraPath))
             {
                 cameras = GaussianSplatCameras.Parse(File.ReadAllText(m_CameraPath));
             }
             FinishCameras();
         }
 
-        void FinishCameras()
+        private void FinishCameras()
         {
             m_Request?.Dispose();
             m_Request = null;
             m_State = State.Complete;
         }
 
-        static unsafe UnmanagedMemoryStream DownloadStream(DownloadHandler download)
+        private static unsafe UnmanagedMemoryStream DownloadStream(DownloadHandler download)
         {
             var bytes = download.nativeData;
             return new UnmanagedMemoryStream((byte*)bytes.GetUnsafeReadOnlyPtr(), bytes.Length);
         }
 
-        void DisposeSource()
+        private void DisposeSource()
         {
             if (m_Read.IsValid())
             {
